@@ -1,6 +1,6 @@
 import os
 import asyncio
-import requests
+import requests # pip install scikit-learn and numpy
 from dotenv import load_dotenv
 from spotify_data import get_playlist # change these to function names when u get them
 from movie_data import get_kaggle_data
@@ -37,7 +37,7 @@ def get_playlist_data(playlist_object):
         tracks[track_id] = {"name": track_name, "artists": artist_names, "genres": genres}
     return tracks
 
-# 2. get_genres(): This will be in the spotify data file but just make it here for now to test the other functions
+# 2. get_genres(): This will probably be in the spotify data file but just make it here for now to test the other functions
 def get_genres(artist_id):
     api_key = os.getenv("SPOTIFY_API_KEY")
     url = f"https://api.spotify.com/v1/artists/{artist_id}"
