@@ -80,7 +80,6 @@ def process_artist_list(artist_array):
         genres.update(artist_genres)
     return artist_names, list(genres)
 
-# Process movie_data.ipynb
 def process_movie_data():
     """Run movie_data.ipynb first"""
     # Artist genre data
@@ -90,99 +89,106 @@ def process_movie_data():
     artist_genres_df = artist_genres_df[0].apply(json.loads).apply(pd.Series)
 
     # Soundtrack data
-        # Spotify soundtrack search data
     with open("../data/spotify-soundtrack-results.pkl", 'rb') as data:
         soundtrack_data = pickle.load(data)
     spotify_soundtrack_df = pd.DataFrame(soundtrack_data)
-    spotify_soundtrack_df[0] = spotify_soundtrack_df[0].replace({'No track found' : '{}', pd.NA: '{}'}) # if no track or pd.NA ==> {}
+    spotify_soundtrack_df[0] = spotify_soundtrack_df[0].replace({'No track found' : '{}', pd.NA: '{}'})
     spotify_soundtrack_df = spotify_soundtrack_df[0].apply(json.loads).apply(pd.Series)
 
-        # IMDB soundtrack data
+    # IMDB soundtrack data
     imdb_df = pd.read_csv('../data/sound_track_imdb_top_250_movie_tv_series.csv')
     imdb_df.drop(columns=['written_performed_by', 'conducted_by', 'libretto_by', 'under_license_from', 'Unnamed: 0'], inplace=True)
     imdb_df['performed_by'] = imdb_df['performed_by'].fillna("nan").astype(str)
     imdb_df = imdb_df.reset_index(drop=True)
 
-        # Merge Spotify and IMDB soundtrack data
+    # Merge Spotify and IMDB soundtrack data
     imdb_spotify_soundtracks_df = pd.concat([spotify_soundtrack_df, imdb_df], axis=1)
     imdb_spotify_soundtracks_df.drop(columns=['year', 'written_by', 'composed_by', 'lyrics_by', 'music_by','courtesy_of'], inplace=True)
     imdb_spotify_soundtracks_df.dropna(subset=['spotify_song', 'spotify_artist', 'spotify_id'], inplace=True)
     imdb_spotify_soundtracks_df.reset_index(drop=True, inplace=True)
 
-        # Combine soundtrack and artist/genre data 
+    # Combine soundtrack and artist/genre data 
     imdb_spotify_soundtracks_genres = pd.concat([artist_genres_df, imdb_spotify_soundtracks_df], axis=1)
     imdb_spotify_soundtracks_genres = imdb_spotify_soundtracks_genres.drop(columns = ['spotify_artist1'])
     imdb_spotify_soundtracks_genres.reset_index(drop=True, inplace=True)
     desired_order = ['name', 'song_name', 'performed_by', 'spotify_song', 'spotify_artist', 'spotify_id', 'spotify_album']
     imdb_spotify_soundtracks_genres = imdb_spotify_soundtracks_genres[desired_order]
 
-    # logging tools to test
     imdb_spotify_soundtracks_genres.to_csv('imdb_spotify_soundtracks_genres.csv', index=False, mode='a')
+
 def soundtrack_recommend(playlist_data, movie_soundtracks):
-    """Recommends 5 movie soundtracks containing the most matching songs to a spotify playlist.
-    
-    :param playlist_data: Dict of Spotify playlist data
-    :type playlist_data: Dict
-    :param movie_soundtracks: imdb_spotify_soundtracks_genres dataframe
-    :type movie_soundtracks: Pandas Dataframe
-    """
-    matchlist = {}
+    matchlist = {}       
+    match_songs = {}     
 
     for index, movie_track in movie_soundtracks.iterrows():
         movie_song = movie_track['song_name']
         movie_artist = movie_track['performed_by']
 
         if not (isinstance(movie_song, str) and isinstance(movie_artist, str)):
-            continue  # skip rows with invalid data
+            continue
         
-        # Use clean_track_name before normalization to remove suffixes like " - 2004 Remaster"
-        movie_song_norm = normalize_string(clean_track_name(movie_song))
+        movie_song_clean = clean_song_title(movie_song)
+        movie_song_norm = normalize_string(movie_song_clean)
         movie_artist_norm = normalize_string(movie_artist)
 
-        if any(
-            playlist_track['name'] and all(playlist_track['artists']) and  
-            (
-                normalize_string(clean_track_name(playlist_track['name'])) in movie_song_norm or
-                movie_song_norm in normalize_string(clean_track_name(playlist_track['name']))
-            ) and
-            any(normalize_string(playlist_artist) in movie_artist_norm for playlist_artist in playlist_track['artists'])
-            for playlist_track in playlist_data.values()
-        ):
-            matchlist[movie_track['name']] = matchlist.get(movie_track['name'], 0) + 1
+        for playlist_track in playlist_data.values():
+            if not (playlist_track['name'] and all(playlist_track['artists'])):
+                continue
+            playlist_song_clean = clean_song_title(playlist_track['name'])
+            playlist_song_norm = normalize_string(playlist_song_clean)
+            playlist_artists_norm = [normalize_string(artist) for artist in playlist_track['artists']]
+
+            song_match = (playlist_song_norm in movie_song_norm) or (movie_song_norm in playlist_song_norm)
+            artist_match = any(playlist_artist in movie_artist_norm for playlist_artist in playlist_artists_norm)
+
+            if song_match and artist_match:
+                movie_name = movie_track['name']
+                matchlist[movie_name] = matchlist.get(movie_name, 0) + 1
+                match_songs.setdefault(movie_name, set()).add(playlist_track['name'])
+                break
+
     top_5_movies = heapq.nlargest(5, matchlist.items(), key=lambda item: item[1])
+
+    for movie, count in top_5_movies:
+        songs = ", ".join(match_songs.get(movie, []))
+        print(f"- {movie}: {count} matching song(s) — Matches: {songs}\n")
+
     return top_5_movies
 
-# 6. (WIP) genre_recommend(): Function that
-# - takes in the spotify playlist dict
-# - records each genre of every track in a list.
-# - looks for movies in TMDB that contains the the most genre matches as the ones in the playlist
-
-# Clean them strings.. 
 def normalize_string(s):
-    s = s.lower()  
-    s = s.strip()  
+    s = s.lower()
+    s = re.sub(r'\b(and|the|of|a|an)\b', '', s)  # remove common stopwords
     s = re.sub(r'[^a-z0-9\s]', '', s)
-    s = re.sub(r'\s+', ' ', s)
+    s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 def clean_track_name(name):
     return re.sub(r'\s*-\s*(remaster|live|edit|version|bonus track).*', '', name, flags=re.I)
 
+def clean_song_title(title):
+    suffixes = [
+        r'\s*-\s*single version',
+        r'\s*-\s*remaster(ed)?',
+        r'\s*-\s*live',
+        r'\s*\(live\)',
+        r'\s*\(remaster(ed)?\)',
+    ]
+    for suffix in suffixes:
+        title = re.sub(suffix, '', title, flags=re.IGNORECASE)
+    return title.strip()
+
 def main():
-    # Import Movie data (run movie_data.ipynb first):
     if not os.path.exists("imdb_spotify_soundtracks_genres.csv"):
         process_movie_data()
     else:
+        global imdb_spotify_soundtracks_genres
         imdb_spotify_soundtracks_genres = pd.read_csv("imdb_spotify_soundtracks_genres.csv")
-    # Enter playlist, extract ID
     playlist_url = input("Enter a Spotify playlist URL: ").strip()
     playlist_id = spotify_data.extract_playlist_id(playlist_url)
     playlist_data = get_playlist_data(playlist_id)
 
-    # Recommendation function
-    recommendations = soundtrack_recommend(playlist_data, imdb_spotify_soundtracks_genres)
-    print(f"Recommended Movies by soundtrack:")
-    for movie, count in recommendations:
-        print(f"- {movie}: {count} matching songs \n")
+    print(f"Recommended Movies by soundtrack:\n")
+    soundtrack_recommend(playlist_data, imdb_spotify_soundtracks_genres)
+
 if __name__ == "__main__":
     main()
